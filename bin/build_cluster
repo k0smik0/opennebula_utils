@@ -1,0 +1,183 @@
+#!/bin/bash
+
+ONE_HOME=/var/lib/one
+
+function create_cluster {
+   local cluster_id=$1
+   echo "### cluster begin ###"
+   echo -n "creating cluster $cluster_id: "
+   onecluster create $cluster_id
+   echo "### cluster end ###"
+   echo
+}
+
+function pop {
+   local array=($@)
+   local popped_array=(${array[@]:0:$((${#array[@]}-1))})
+   echo ${popped_array[@]}
+}
+function last {
+   [ $# -eq 1 ] && echo $@
+   local array=($@)
+   local li=$((${#array[@]}-1))
+   local last=(${array[@]:li:li})
+   echo $last
+}
+
+function create_hosts {
+   echo "### hosts begin ###"
+   local cluster_id=$(last ${@})
+   local hosts=$(pop ${@})
+   for host in ${hosts[@]}
+   do
+      echo -n "creating host $host: "
+      onehost create $host -i kvm -v kvm -n dummy
+      echo -n "adding host $host to cluster $cluster_id: "
+      onecluster addhost $cluster_id $host
+   done
+   echo "### hosts end ###"
+}
+
+function create_vnet {
+   echo "### vnet begin ###"
+   vnet_file=$1
+   vnet_name=${vnet_file/.vnet/}
+#   vnet_name=$(grep NAME $1 | awk '{print $3}')
+   local cluster_id=$2
+   echo -n "creating vnet ${vnet_name}: "
+   onevnet create ${vnet_file}
+   echo "adding vnet ${vnet_name} to cluster ${cluster_id}. "
+   onecluster addvnet $cluster_id $vnet_name
+   echo "### vnet end ###"
+}
+
+
+function create_datastores {
+   echo "### datastores begin ###"
+   local cluster_id=$(last ${@})
+   local datastores_files=$(pop ${@})
+   [ -d datastores/${cluster_id} ] || mkdir datastores/${cluster_id}
+   for ds in ${datastores_files[@]}
+   do
+      local ds_name=$(grep NAME ${ds} | awk '{print $3}')
+      echo -n "creating datastore ${ds_name} from ${ds}: "
+      onedatastore create ${ds}
+      echo -n "adding datastore ${ds_name} to cluster ${cluster_id}: "
+      onecluster adddatastore ${cluster_id} ${ds_name}
+   done
+   echo
+   echo "copy this line below and add to template, using command \"onecluster update ${cluster_id}\""
+   echo "DATASTORE_LOCATION=$ONE_HOME/datastores/${cluster_id}"
+   echo "### datastores end ###"
+}
+
+function create_image {
+   echo "### image begin ###"
+   local image_name=$1
+   local image_path=$2
+   local cluster_id=$3
+   local fmt=$(echo "${image_path}" | awk -F"_" '{print $2}' | cut -d"." -f1)
+   echo -n "creating $fmt image ${image_name} from ${image_path}: "
+   oneimage create --name "${image_name}" --path "${image_path}" --driver $fmt --datastore ${cluster_id}__images_qcow2
+   echo "### image end ###"
+#   echo   
+}
+
+function create_template {
+   echo "### template begin ###"
+   local template_name=$1
+   local image_name=$2
+   local vnet_name=$3
+   echo -n "creating template ${template_name} from image ${image_name} on vnet ${vnet_name}: "
+   onetemplate create --name "Debian-7.3 x86_64" --cpu 0.5 --memory 512 --arch x86_64 --disk Debian-7.3_x86_64 --nic "${vnet_name}" --vnc --ssh
+   echo "### template end ###"
+   echo
+}
+
+function update_pubkey {
+   echo -e "copy this line below and add to template, using command \"EDITOR=vi oneuser update oneadmin\"\n"
+   echo SSH_PUBLIC_KEY="`cat ~/.ssh/id_rsa.pub`"
+}
+
+ON=/data/opennebula
+
+#create_cluster $cluster
+#create_hosts "cavallo-pazzo_one" "n-johnny-5_one" $cluster
+#create_vnet ${name}.vnet $cluster
+#create_datastores "iubris__*ds" $cluster
+#create_image "Debian-7.3_x86_64" "$ON/disk-images/debian-7.3.0-amd64-reiserfs_qcow2.img" $cluster
+#create_template "Debian-7.3 x86_64" "Debian-7.3_x86_64" ${vnet_name} $cluster
+#update_pubkey
+
+function usage {
+   echo "Usage: `basename $0` <build_action: all|cluster|hosts|vnet|datastores|image|template> [argument(s)]"
+}
+
+function check_cluster_exists {
+   onecluster list -l NAME -x | grep -w $1 >/dev/null 2>&1 && return 0 || (echo "cluster $cluster does not exist" && return 1)
+}
+
+[ $# -lt 1 ] && usage && exit 1
+
+action=$1
+shift
+cluster=$(last ${@})
+cluster=`echo "$cluster" | sed 's/ /_/g'`
+
+[ $# -lt 1 ] && usage && exit 1
+
+declare -x argv=($(pop ${@}))
+
+
+case $action in
+   cluster)
+      [ $# -ne 1 ] && echo "<cluster> option requires [cluster_name]" && exit 1
+      create_cluster $cluster
+      update_pubkey
+      ;;
+   hosts)
+      [ $# -lt 2 ] && echo "<hosts> option requires: [host(s)] [cluster_name]" && exit 1
+      check_cluster_exists $cluster || exit 1
+      hosts=${argv[@]}
+      create_hosts ${hosts} $cluster
+      ;;
+   vnet)
+      [ $# -ne 2 ] && echo "<vnet> option requires: [.vnet_file] [cluster_name]" && exit 1
+      check_cluster_exists $cluster || exit 1
+      vnet="${argv[0]}"
+      [ ! -f "$vnet" ] && echo "$vnet file not found" && exit 1
+      create_vnet ${vnet} $cluster
+      ;;
+   datastores)
+      [ $# -lt 2 ] && echo "<datastores> option requires: [.ds_datastore(s)_file(s)] [cluster]" && exit 1
+      check_cluster_exists $cluster || exit 1
+      ds_files=${argv[@]}
+      echo ${ds_files[@]} | egrep -ve "__files.ds$|__images_qcow2.ds$|__system.ds" >/dev/null && echo "you must provide a [somename]__files.ds, a [somename]__image_qcow2.ds and a [somename]__system.ds file" && exit 1
+      create_datastores ${ds_files} $cluster
+      ;;
+   image)
+      [ $# -ne 3 ] && echo "<image> option requires: [image_name] [image_path] [cluster] as arguments" && exit 1
+      check_cluster_exists $cluster || exit 1
+      image_name="${argv[0]}"
+      image_path="${argv[1]}"
+      [ ! -f ${image_path} ] && echo ${image_path} "does not exist" && exit 1
+echo      create_image "$image_name" "$image_path" $cluster
+      ;;
+   template)
+      [ $# -ne 4 ] && echo "<image> option requires: [template_name] [image_name] [vnet_name] [cluster] as arguments" && exit 1
+      check_cluster_exists $cluster || exit 1
+      template_name="${argv[0]}"
+      image_disk="${argv[1]}"
+      vnet_name="${argv[2]}"
+      oneimage list -l NAME -x | grep -w "${image_disk}" >/dev/null 2>&1 || (echo "image ${image_disk} does not exist" && exit 1)
+      onevnet  list -l NAME -x | grep -w "${vnet_name}" >/dev/null 2>&1 || (echo "vnet ${vnet_name} does not exist" && exit 1)
+echo      create_template $template_name $disk_image ${vnet_name} $cluster
+      ;;
+   all)
+      echo TODO
+      ;;
+   *)
+      usage && exit 1
+      ;;
+esac  
+      
