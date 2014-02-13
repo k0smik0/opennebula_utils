@@ -1,1 +1,4 @@
-/var/log/one/read_log
+#!/bin/bash
+
+cd /var/log/one
+tail -f oned.log*  one_[aitv]*log*  *error* sched.log* novnc.log* [0-9]+.log*
