@@ -1,0 +1,5 @@
+#!/bin/bash
+
+sudo /sbin/ifdown br-one
+sudo /sbin/ifup br-one
+sudo /bin/systemctl restart opennebula

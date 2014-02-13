@@ -2,14 +2,6 @@
 
 ONE_HOME=/var/lib/one
 
-function create_cluster {
-   local cluster_id=$1
-   echo "### cluster begin ###"
-   echo -n "creating cluster $cluster_id: "
-   onecluster create $cluster_id
-   echo "### cluster end ###"
-   echo
-}
 
 function pop {
    local array=($@)
@@ -24,6 +16,15 @@ function last {
    echo $last
 }
 
+function create_cluster {
+   local cluster_id=$1
+   echo "### cluster begin ###"
+   echo -n "creating cluster $cluster_id: "
+   onecluster create $cluster_id
+   echo "### cluster end ###"
+   echo
+}
+
 function create_hosts {
    echo "### hosts begin ###"
    local cluster_id=$(last ${@})
@@ -32,7 +33,7 @@ function create_hosts {
    do
       echo -n "creating host $host: "
       onehost create $host -i kvm -v kvm -n dummy
-      echo -n "adding host $host to cluster $cluster_id: "
+      echo "adding host $host to cluster $cluster_id"
       onecluster addhost $cluster_id $host
    done
    echo "### hosts end ###"
@@ -41,16 +42,15 @@ function create_hosts {
 function create_vnet {
    echo "### vnet begin ###"
    vnet_file=$1
-   vnet_name=${vnet_file/.vnet/}
-#   vnet_name=$(grep NAME $1 | awk '{print $3}')
+#   vnet_name=${vnet_file/.vnet/}
+   vnet_name=$(grep NAME ${vnet_file} | awk -F"=" '{print $2}' | sed 's/ //g' | sed 's/"//g')
    local cluster_id=$2
    echo -n "creating vnet ${vnet_name}: "
    onevnet create ${vnet_file}
    echo "adding vnet ${vnet_name} to cluster ${cluster_id}. "
-   onecluster addvnet $cluster_id $vnet_name
+   onecluster addvnet ${cluster_id} ${vnet_name}
    echo "### vnet end ###"
 }
-
 
 function create_datastores {
    echo "### datastores begin ###"
@@ -76,7 +76,8 @@ function create_image {
    local image_name=$1
    local image_path=$2
    local cluster_id=$3
-   local fmt=$(echo "${image_path}" | awk -F"_" '{print $2}' | cut -d"." -f1)
+   local fmt=$(echo "${image_path}" | awk -F"__" '{print $2}' | cut -d"." -f1)
+   echo $fmt
    echo -n "creating $fmt image ${image_name} from ${image_path}: "
    oneimage create --name "${image_name}" --path "${image_path}" --driver $fmt --datastore ${cluster_id}__images_qcow2
    echo "### image end ###"
@@ -89,7 +90,7 @@ function create_template {
    local image_name=$2
    local vnet_name=$3
    echo -n "creating template ${template_name} from image ${image_name} on vnet ${vnet_name}: "
-   onetemplate create --name "Debian-7.3 x86_64" --cpu 0.5 --memory 512 --arch x86_64 --disk Debian-7.3_x86_64 --nic "${vnet_name}" --vnc --ssh
+   onetemplate create --name "${template_name}" --cpu 0.5 --memory 1024 --arch x86_64 --disk ${image_name} --nic "${vnet_name}" --vnc --ssh
    echo "### template end ###"
    echo
 }
@@ -124,8 +125,6 @@ shift
 cluster=$(last ${@})
 cluster=`echo "$cluster" | sed 's/ /_/g'`
 
-[ $# -lt 1 ] && usage && exit 1
-
 declare -x argv=($(pop ${@}))
 
 
@@ -142,11 +141,11 @@ case $action in
       create_hosts ${hosts} $cluster
       ;;
    vnet)
-      [ $# -ne 2 ] && echo "<vnet> option requires: [.vnet_file] [cluster_name]" && exit 1
+      [ $# -lt 2 ] && echo "<vnet> option requires: [.vnet_file] [cluster_name]" && exit 1
       check_cluster_exists $cluster || exit 1
-      vnet="${argv[0]}"
-      [ ! -f "$vnet" ] && echo "$vnet file not found" && exit 1
-      create_vnet ${vnet} $cluster
+      vnet_file="${argv[0]}"
+      [ ! -f "$vnet_file" ] && echo "$vnet_file file not found" && exit 1
+      create_vnet ${vnet_file} $cluster
       ;;
    datastores)
       [ $# -lt 2 ] && echo "<datastores> option requires: [.ds_datastore(s)_file(s)] [cluster]" && exit 1
@@ -156,22 +155,20 @@ case $action in
       create_datastores ${ds_files} $cluster
       ;;
    image)
-      [ $# -ne 3 ] && echo "<image> option requires: [image_name] [image_path] [cluster] as arguments" && exit 1
-      check_cluster_exists $cluster || exit 1
+      [ $# -lt 3 ] && echo "<image> option requires: [image_name] [image_path] [cluster] as arguments" && exit 1
       image_name="${argv[0]}"
       image_path="${argv[1]}"
       [ ! -f ${image_path} ] && echo ${image_path} "does not exist" && exit 1
-echo      create_image "$image_name" "$image_path" $cluster
+      create_image "${image_name}" "${image_path}" ${cluster}
       ;;
    template)
-      [ $# -ne 4 ] && echo "<image> option requires: [template_name] [image_name] [vnet_name] [cluster] as arguments" && exit 1
-      check_cluster_exists $cluster || exit 1
+      [ $# -lt 3 ] && echo "<image> option requires: [template_name] [image_name] [vnet_name] as arguments" && exit 1
       template_name="${argv[0]}"
       image_disk="${argv[1]}"
       vnet_name="${argv[2]}"
       oneimage list -l NAME -x | grep -w "${image_disk}" >/dev/null 2>&1 || (echo "image ${image_disk} does not exist" && exit 1)
       onevnet  list -l NAME -x | grep -w "${vnet_name}" >/dev/null 2>&1 || (echo "vnet ${vnet_name} does not exist" && exit 1)
-echo      create_template $template_name $disk_image ${vnet_name} $cluster
+      create_template ${template_name} ${image_disk} ${vnet_name} ${cluster}
       ;;
    all)
       echo TODO
