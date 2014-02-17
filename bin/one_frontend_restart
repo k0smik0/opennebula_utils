@@ -1,5 +1,53 @@
-#!/bin/bash
+#!/bin/bash 
 
-sudo /sbin/ifdown br-one
-sudo /sbin/ifup br-one
-sudo /bin/systemctl restart opennebula
+IPTABLES=/sbin/iptables
+iptables() {
+   echo "applying iptables rules"
+   $IPTABLES -t nat -D PREROUTING -i wlan0 -p tcp -m tcp --dport 9869 -j DNAT --to-destination 10.19.19.1 2>/dev/null
+   $IPTABLES -t nat -D POSTROUTING -s 10.19.19.0/24 -j MASQUERADE 2>/dev/null
+
+   $IPTABLES -t nat -A PREROUTING -i wlan0 -p tcp -m tcp --dport 9869 -j DNAT --to-destination 10.19.19.1
+   $IPTABLES -t nat -A POSTROUTING -s 10.19.19.0/24 -j MASQUERADE
+}
+
+brone() {
+   # br-one
+   ifquery --state br-one >/dev/null || (echo "br-one is down, upping..." && /sbin/ifup br-one) || (echo "br-one failed to up, forcing down and re-up" && /sbin/ifdown --force br-one && /sbin/ifup br-one)
+}
+
+daemon() {
+   # opennebula daemon + sunstone
+   echo "restarting opennebula daemon"
+   /bin/systemctl restart opennebula
+   /bin/systemctl restart opennebula-sunstone
+}
+
+apache(){
+   # apache proxy
+   echo -n "start apache: "
+   ps axuw | grep httpd | grep jboss >/dev/null && echo "still running" || /opt/jboss/httpd/sbin/apachectl start
+}
+
+module() {
+   modprobe kvm-intel
+}
+
+nfs() {
+   echo "updating nfs"
+   exportfs -v 10.19.19.0:/var/lib/one/datastores/iubris
+}
+
+all() {
+   brone
+   daemon
+   apache
+   module
+   iptables
+   nfs
+}
+
+[ $(id -u) -ne 0 ] && echo "not acting as root, exit" && exit 1
+
+[ $# -gt 0 ] && $@ || (all)
+
+

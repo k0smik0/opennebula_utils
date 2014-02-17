@@ -1,0 +1,43 @@
+#!/bin/bash
+
+#[ $# -lt 1 ] && echo "Usage: $(basename $0) remote_node_ip" && exit 1
+
+NODE=$1
+OWN_IP=$(ip route get 8.8.8.8 | awk '/8.8.8.8/ {print $NF}')
+
+node_check() {
+   local node_one=$1
+   ping -v -c 1 $node_one >/dev/null 2>&1 && return 0 || return 1
+}
+
+node_restart() {
+   local node=$1
+   ssh -t $node "one_node_restart $OWN_IP"
+}
+
+node_check_restart() {
+   local node_one=$1
+   local node=$2
+   echo -n "$node_one: "
+   node_check $node_one && echo "ok" || (echo "restarting."; node_restart $node)
+}
+
+
+# n-johnny-5
+#echo -n "nj5: "
+node_check_restart n-johnny-5_one k0z
+
+# virs@nj5
+virs=$(ssh k0z "sudo virsh list" | grep running | awk '{print $2}')
+for v in $virs; do
+   vip=$(grep $v /etc/hosts | awk '{print $1}')
+   echo -n "$v: "
+   node_check $vip \
+      && echo "ok" \
+      || (echo "is running but not responding, try adding its vnet to bridge."; \
+         ssh k0z "one_node_restart $OWN_IP get_vnet_and_add $v" )
+done
+
+# progsoul by argument
+#[ ! -z $NODE ] && echo -n "$NODE: " && ping -c 1 $NODE >/dev/null 2>&1 && echo "ok" || (echo "restarting. " && ssh -t $NODE "one_node_restart $OWN_IP")
+[ ! -z $NODE ] && node_check_restart progsoul_one $NODE
